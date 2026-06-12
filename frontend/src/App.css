@@ -1,42 +1,289 @@
+/* ─── Layout generale ────────────────────────────────────────────────────── */
 #root {
-  max-width: 1280px;
+  display: flex;
+  flex-direction: column;   /* Allinea i blocchi dall'alto in basso */
+  align-items: center;      /* Centra orizzontalmente tutto il contenuto */
+  justify-content: center;  /* Centra verticalmente rispetto all'altezza */
+  min-height: 100vh;        /* Prende tutta l'altezza dello schermo visibile */
+  width: 100%;              /* Estende la base a tutta larghezza */
+}
+
+.container {
+  max-width: 1000px;
+  width: 100%;
   margin: 0 auto;
   padding: 2rem;
+}
+
+.container h1 {
+  text-align: center;
+  width: 100%;
+  margin-bottom: 2rem; /* Aggiunge un po' di spazio sotto il titolo se serve */
+}
+
+
+/* ─── Form di inserimento ────────────────────────────────────────────────── */
+.form-inserimento {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.form-inserimento .input-group {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.form-inserimento input[type="text"],
+.form-inserimento input[type="number"],
+.form-inserimento select {
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+}
+
+.form-inserimento input[type="number"] {
+  width: 120px;
+}
+
+.btn-ai {
+  padding: 0.5rem;
+  background-color: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-ai:disabled {
+  cursor: wait;
+}
+
+.btn-aggiungi {
+  padding: 0.5rem 1rem;
+  background-color: #646cff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* ─── Carte statistiche ──────────────────────────────────────────────────── */
+.statistiche {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  padding: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  flex: 1;
+  background-color: #1e1e1e;
+  min-width: 200px;
+}
+
+.stat-card .stat-valore {
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.stat-card.saldo  { color: #fff; }
+.stat-card.entrate { color: #4ade80; }
+.stat-card.uscite  { color: #f87171; }
+
+/* ─── AI Financial Advisor ───────────────────────────────────────────────── */
+.ai-advisor {
+  background-color: #1e1e2f;
+  padding: 1.5rem;
+  border-radius: 8px;
+  margin-bottom: 2rem;
+  border: 1px solid #4ade80;
+  text-align: left;
+}
+
+.ai-advisor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.ai-advisor-header h3 {
+  margin: 0;
+  color: #4ade80;
+}
+
+.btn-analisi {
+  padding: 0.5rem 1rem;
+  background-color: #4ade80;
+  color: #1e1e1e;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.btn-analisi:disabled {
+  cursor: wait;
+}
+
+.ai-advice-text {
+  color: #e2e8f0;
+  line-height: 1.8;
+  font-size: 0.97rem;
+}
+
+.ai-advice-placeholder {
+  color: #888;
+  font-style: italic;
+  margin: 0;
+}
+
+/* ─── Grafici ────────────────────────────────────────────────────────────── */
+.grafici {
+  display: flex;
+  justify-content: space-around;
+  flex-wrap: wrap;
+  margin-bottom: 2rem;
+  background-color: #2d2d2d;
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+/* ─── Barra filtri ───────────────────────────────────────────────────────── */
+.barra-filtri {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  background-color: #1a1a1a;
+  padding: 1rem;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.filtri-gruppo {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.filtri-gruppo input,
+.filtri-gruppo select {
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background-color: #2d2d2d;
+  color: #fff;
+}
+
+.btn-reset {
+  padding: 0.5rem 1rem;
+  background-color: #d32f2f;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-export {
+  padding: 0.5rem 1rem;
+  background-color: #2e7d32;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+/* ─── Tabella ────────────────────────────────────────────────────────────── */
+.tabella-transazioni {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.tabella-transazioni thead tr {
+  background-color: #1a1a1a;
+  color: white;
+}
+
+.tabella-transazioni th,
+.tabella-transazioni td {
+  padding: 0.5rem;
+  border: 1px solid #444;
+}
+
+.tabella-transazioni td.importo {
+  font-weight: bold;
+}
+
+.tabella-transazioni td.tipo {
+  text-transform: capitalize;
+}
+
+.tabella-transazioni td.vuota {
   text-align: center;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.riga-entrata {
+  text-align: center;
+  background-color: rgba(74, 222, 128, 0.1);
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.riga-uscita {
+  text-align: center;
+  background-color: rgba(248, 113, 113, 0.1);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.badge-categoria {
+  background-color: #444;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.85rem;
 }
 
-.card {
-  padding: 2em;
+.btn-modifica {
+  margin-right: 0.5rem;
 }
 
-.read-the-docs {
-  color: #888;
+.btn-elimina {
+  background-color: #c2185b;
+  color: white;
+  border: none;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.input-edit-amount {
+  width: 80px;
+}
+
+/* ─── Paginazione ────────────────────────────────────────────────────────── */
+.paginazione {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.btn-pagina {
+  padding: 0.5rem 1rem;
+}
+
+.btn-pagina:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }

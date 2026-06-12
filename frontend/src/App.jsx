@@ -13,15 +13,10 @@ const API_URL = "http://localhost:5000";
 function renderMarkdown(text) {
   if (!text) return "";
   return text
-    // **grassetto**
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    // *corsivo*
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    // Titoli numerati: "1. testo" → riga con margine
     .replace(/^(\d+\.\s)/gm, "<br/><span style='font-weight:bold'>$1</span>")
-    // Righe vuote → spazio
     .replace(/\n\n/g, "<br/><br/>")
-    // Newline singoli → spazio
     .replace(/\n/g, " ");
 }
 
@@ -201,67 +196,78 @@ function App() {
   const tutteLeCategorieUnivoche = Array.from(new Set(Object.values(CATEGORIES).flat()));
 
   return (
-    <div className="container" style={{ maxWidth: '1000px', margin: '0 auto', padding: '2rem' }}>
+    <div className="container">
       <h1>Gestionale Finanze</h1>
 
       {/* FORM DI INSERIMENTO */}
-      <form onSubmit={handleSubmit} style={{ display: "flex", gap: "0.5rem", marginBottom: "2rem", justifyContent: "center", flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ display: "flex", gap: "0.2rem" }}>
-          <input type="text" placeholder="Descrizione" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #ccc" }} />
-          <button type="button" onClick={handleAutoCategorize} disabled={isCategorizing || !form.description} style={{ padding: "0.5rem", backgroundColor: "#3b82f6", color: "white", border: "none", borderRadius: "4px", cursor: isCategorizing ? "wait" : "pointer" }} title="Lascia che l'IA scelga la categoria">
+      <form onSubmit={handleSubmit} className="form-inserimento">
+        <div className="input-group">
+          <input
+            type="text"
+            placeholder="Descrizione"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+          <button
+            type="button"
+            className="btn-ai"
+            onClick={handleAutoCategorize}
+            disabled={isCategorizing || !form.description}
+            title="Lascia che l'IA scelga la categoria"
+          >
             {isCategorizing ? "⏳" : "✨"}
           </button>
         </div>
-        <input type="number" step="0.01" placeholder="Importo" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #ccc", width: "120px" }} />
-        <select value={form.type} onChange={(e) => handleTypeChange(e.target.value)} style={{ padding: "0.5rem", borderRadius: "4px" }}>
+        <input
+          type="number"
+          step="0.01"
+          placeholder="Importo"
+          value={form.amount}
+          onChange={(e) => setForm({ ...form, amount: e.target.value })}
+        />
+        <select value={form.type} onChange={(e) => handleTypeChange(e.target.value)}>
           <option value="entrata">Entrata</option>
           <option value="uscita">Uscita</option>
         </select>
-        <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={{ padding: "0.5rem", borderRadius: "4px" }}>
+        <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
           {CATEGORIES[form.type].map(cat => <option key={cat} value={cat}>{cat}</option>)}
         </select>
-        <button type="submit" style={{ padding: "0.5rem 1rem", backgroundColor: "#646cff", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>Aggiungi</button>
+        <button type="submit" className="btn-aggiungi">Aggiungi</button>
       </form>
 
       {loading && <p>Caricamento dati...</p>}
 
       {/* CARTE STATISTICHE */}
-      <div style={{ display: "flex", gap: "1rem", justifyContent: "space-between", marginBottom: "2rem", flexWrap: "wrap" }}>
-        <div style={{ padding: "1rem", border: "1px solid #ccc", borderRadius: "8px", flex: 1, backgroundColor: "#1e1e1e", color: "#fff", minWidth: "200px" }}>
+      <div className="statistiche">
+        <div className="stat-card saldo">
           <h3>Saldo Filtrato</h3>
-          <p style={{ fontSize: "1.5rem", fontWeight: "bold" }}>€ {saldo.toFixed(2)}</p>
+          <p className="stat-valore">€ {saldo.toFixed(2)}</p>
         </div>
-        <div style={{ padding: "1rem", border: "1px solid #ccc", borderRadius: "8px", flex: 1, backgroundColor: "#1e1e1e", color: "#4ade80", minWidth: "200px" }}>
+        <div className="stat-card entrate">
           <h3>Totale Entrate</h3>
-          <p style={{ fontSize: "1.5rem", fontWeight: "bold" }}>€ {entrate.toFixed(2)}</p>
+          <p className="stat-valore">€ {entrate.toFixed(2)}</p>
         </div>
-        <div style={{ padding: "1rem", border: "1px solid #ccc", borderRadius: "8px", flex: 1, backgroundColor: "#1e1e1e", color: "#f87171", minWidth: "200px" }}>
+        <div className="stat-card uscite">
           <h3>Totale Uscite</h3>
-          <p style={{ fontSize: "1.5rem", fontWeight: "bold" }}>€ {uscite.toFixed(2)}</p>
+          <p className="stat-valore">€ {uscite.toFixed(2)}</p>
         </div>
       </div>
 
-      {/* 🤖 IA FINANCIAL ADVISOR */}
-      <div style={{ backgroundColor: "#1e1e2f", padding: "1.5rem", borderRadius: "8px", marginBottom: "2rem", border: "1px solid #4ade80", textAlign: "left" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "1rem" }}>
-          <h3 style={{ margin: 0, color: "#4ade80" }}>🤖 AI Financial Advisor</h3>
-          <button
-            onClick={fetchAiAdvice}
-            disabled={loadingAdvice}
-            style={{ padding: "0.5rem 1rem", backgroundColor: "#4ade80", color: "#1e1e1e", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: loadingAdvice ? "wait" : "pointer" }}
-          >
+      {/* AI FINANCIAL ADVISOR */}
+      <div className="ai-advisor">
+        <div className="ai-advisor-header">
+          <h3>🤖 AI Financial Advisor</h3>
+          <button className="btn-analisi" onClick={fetchAiAdvice} disabled={loadingAdvice}>
             {loadingAdvice ? "Analisi in corso..." : "Genera Analisi"}
           </button>
         </div>
-
-        {/* Testo con Markdown renderizzato */}
         {aiAdvice ? (
           <div
-            style={{ color: "#e2e8f0", lineHeight: "1.8", fontSize: "0.97rem" }}
+            className="ai-advice-text"
             dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAdvice) }}
           />
         ) : (
-          <p style={{ color: "#888", fontStyle: "italic", margin: 0 }}>
+          <p className="ai-advice-placeholder">
             Clicca su &apos;Genera Analisi&apos; per ottenere consigli personalizzati basati sulle tue transazioni attuali.
           </p>
         )}
@@ -269,7 +275,7 @@ function App() {
 
       {/* GRAFICI */}
       {allFilteredTransactions.length > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", marginBottom: "2rem", backgroundColor: "#2d2d2d", borderRadius: "8px", padding: "1rem" }}>
+        <div className="grafici">
           <div>
             <h4>Bilancio Filtrato</h4>
             <PieChart width={300} height={250}>
@@ -296,53 +302,79 @@ function App() {
       )}
 
       {/* BARRA DEI FILTRI */}
-      <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem", alignItems: "center", justifyContent: "space-between", backgroundColor: "#1a1a1a", padding: "1rem", borderRadius: "8px", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <input type="text" placeholder="Cerca descrizione..." value={filters.search} onChange={(e) => handleFilterChange("search", e.target.value)} style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #444", backgroundColor: "#2d2d2d", color: "#fff" }} />
-          <select value={filters.category} onChange={(e) => handleFilterChange("category", e.target.value)} style={{ padding: "0.5rem", borderRadius: "4px", backgroundColor: "#2d2d2d", color: "#fff", border: "1px solid #444" }}>
+      <div className="barra-filtri">
+        <div className="filtri-gruppo">
+          <input
+            type="text"
+            placeholder="Cerca descrizione..."
+            value={filters.search}
+            onChange={(e) => handleFilterChange("search", e.target.value)}
+          />
+          <select value={filters.category} onChange={(e) => handleFilterChange("category", e.target.value)}>
             <option value="Tutte">Tutte le categorie</option>
             {tutteLeCategorieUnivoche.map(cat => <option key={cat} value={cat}>{cat}</option>)}
           </select>
-          <input type="month" value={filters.month} onChange={(e) => handleFilterChange("month", e.target.value)} style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #444", backgroundColor: "#2d2d2d", color: "#fff" }} />
+          <input
+            type="month"
+            value={filters.month}
+            onChange={(e) => handleFilterChange("month", e.target.value)}
+          />
           {(filters.search || filters.category !== "Tutte" || filters.month) && (
-            <button onClick={() => setFilters({ search: "", category: "Tutte", month: "" })} style={{ padding: "0.5rem 1rem", backgroundColor: "#d32f2f", color: "white", border: "none", borderRadius: "4px" }}>Resetta Filtri</button>
+            <button className="btn-reset" onClick={() => setFilters({ search: "", category: "Tutte", month: "" })}>
+              Resetta Filtri
+            </button>
           )}
         </div>
-        <button onClick={exportToCSV} style={{ padding: "0.5rem 1rem", backgroundColor: "#2e7d32", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold" }}>📥 Esporta CSV</button>
+        <button className="btn-export" onClick={exportToCSV}>📥 Esporta CSV</button>
       </div>
 
       {/* TABELLA */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "1rem" }}>
+      <table className="tabella-transazioni">
         <thead>
-          <tr style={{ backgroundColor: "#1a1a1a", color: "white" }}>
-            <th style={{ padding: "0.5rem", border: "1px solid #444" }}>Descrizione</th>
-            <th style={{ padding: "0.5rem", border: "1px solid #444" }}>Importo</th>
-            <th style={{ padding: "0.5rem", border: "1px solid #444" }}>Tipo</th>
-            <th style={{ padding: "0.5rem", border: "1px solid #444" }}>Categoria</th>
-            <th style={{ padding: "0.5rem", border: "1px solid #444" }}>Azioni</th>
+          <tr>
+            <th>Descrizione</th>
+            <th>Importo</th>
+            <th>Tipo</th>
+            <th>Categoria</th>
+            <th>Azioni</th>
           </tr>
         </thead>
         <tbody>
           {transactions.length === 0 ? (
-            <tr><td colSpan="5" style={{ padding: "1rem", textAlign: "center", border: "1px solid #444" }}>Nessuna transazione disponibile</td></tr>
+            <tr><td colSpan="5" className="vuota">Nessuna transazione disponibile</td></tr>
           ) : (
             transactions.map((t) => (
-              <tr key={t.id} style={{ textAlign: "center", backgroundColor: t.type === 'entrata' ? 'rgba(74, 222, 128, 0.1)' : 'rgba(248, 113, 113, 0.1)' }}>
+              <tr key={t.id} className={t.type === 'entrata' ? 'riga-entrata' : 'riga-uscita'}>
                 {editingId === t.id ? (
                   <>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444" }}><input value={editData.description} onChange={(e) => setEditData({ ...editData, description: e.target.value })} /></td>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444" }}><input type="number" step="0.01" value={editData.amount} onChange={(e) => setEditData({ ...editData, amount: e.target.value })} style={{ width: "80px" }} /></td>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444" }}><select value={editData.type} onChange={(e) => setEditData({ ...editData, type: e.target.value, category: CATEGORIES[e.target.value][0] })}><option value="entrata">Entrata</option><option value="uscita">Uscita</option></select></td>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444" }}><select value={editData.category} onChange={(e) => setEditData({ ...editData, category: e.target.value })}>{CATEGORIES[editData.type || 'entrata'].map(cat => <option key={cat} value={cat}>{cat}</option>)}</select></td>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444" }}><button onClick={() => handleUpdate(t.id)} style={{ marginRight: "0.5rem" }}>Salva</button><button onClick={() => setEditingId(null)}>Annulla</button></td>
+                    <td><input value={editData.description} onChange={(e) => setEditData({ ...editData, description: e.target.value })} /></td>
+                    <td><input type="number" step="0.01" className="input-edit-amount" value={editData.amount} onChange={(e) => setEditData({ ...editData, amount: e.target.value })} /></td>
+                    <td>
+                      <select value={editData.type} onChange={(e) => setEditData({ ...editData, type: e.target.value, category: CATEGORIES[e.target.value][0] })}>
+                        <option value="entrata">Entrata</option>
+                        <option value="uscita">Uscita</option>
+                      </select>
+                    </td>
+                    <td>
+                      <select value={editData.category} onChange={(e) => setEditData({ ...editData, category: e.target.value })}>
+                        {CATEGORIES[editData.type || 'entrata'].map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <button className="btn-modifica" onClick={() => handleUpdate(t.id)}>Salva</button>
+                      <button onClick={() => setEditingId(null)}>Annulla</button>
+                    </td>
                   </>
                 ) : (
                   <>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444" }}>{t.description}</td>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444", fontWeight: "bold" }}>€ {Number(t.amount).toFixed(2)}</td>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444", textTransform: "capitalize" }}>{t.type}</td>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444" }}><span style={{ backgroundColor: "#444", padding: "2px 8px", borderRadius: "12px", fontSize: "0.85rem" }}>{t.category || "Nessuna"}</span></td>
-                    <td style={{ padding: "0.5rem", border: "1px solid #444" }}><button onClick={() => { setEditingId(t.id); setEditData(t); }} style={{ marginRight: "0.5rem" }}>Modifica</button><button onClick={() => handleDelete(t.id)} style={{ backgroundColor: "#c2185b", color: "white", border: "none", padding: "3px 8px", borderRadius: "4px", cursor: "pointer" }}>Elimina</button></td>
+                    <td>{t.description}</td>
+                    <td className="importo">€ {Number(t.amount).toFixed(2)}</td>
+                    <td className="tipo">{t.type}</td>
+                    <td><span className="badge-categoria">{t.category || "Nessuna"}</span></td>
+                    <td>
+                      <button className="btn-modifica" onClick={() => { setEditingId(t.id); setEditData(t); }}>Modifica</button>
+                      <button className="btn-elimina" onClick={() => handleDelete(t.id)}>Elimina</button>
+                    </td>
                   </>
                 )}
               </tr>
@@ -352,10 +384,14 @@ function App() {
       </table>
 
       {/* PAGINAZIONE */}
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "1rem", marginTop: "1.5rem" }}>
-        <button disabled={page === 1} onClick={() => setPage(prev => Math.max(prev - 1, 1))} style={{ padding: "0.5rem 1rem", cursor: page === 1 ? "not-allowed" : "pointer", opacity: page === 1 ? 0.5 : 1 }}>◀ Precedente</button>
+      <div className="paginazione">
+        <button className="btn-pagina" disabled={page === 1} onClick={() => setPage(prev => Math.max(prev - 1, 1))}>
+          ◀ Precedente
+        </button>
         <span>Pagina <strong>{page}</strong> di {totalPages}</span>
-        <button disabled={page === totalPages} onClick={() => setPage(prev => Math.min(prev + 1, totalPages))} style={{ padding: "0.5rem 1rem", cursor: page === totalPages ? "not-allowed" : "pointer", opacity: page === totalPages ? 0.5 : 1 }}>Successivo ▶</button>
+        <button className="btn-pagina" disabled={page === totalPages} onClick={() => setPage(prev => Math.min(prev + 1, totalPages))}>
+          Successivo ▶
+        </button>
       </div>
     </div>
   );
