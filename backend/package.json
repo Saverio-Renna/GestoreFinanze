@@ -14,11 +14,14 @@
   "description": "",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.0",
-    "mysql2": "^3.22.5"
+    "mysql2": "^3.22.5",
+    "redis": "^6.0.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",
@@ -27,7 +30,11 @@
   },
   "jest": {
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.js"],
-    "setupFilesAfterEnv": ["./tests/setup.js"]
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "setupFilesAfterEnv": [
+      "./tests/setup.js"
+    ]
   }
 }

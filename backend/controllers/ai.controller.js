@@ -1,5 +1,6 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const service = require('../services/transactions.service');
+const redisClient = require('../config/redis'); // Importa il client Redis
 
 // Verifica chiave all'avvio
 if (!process.env.GEMINI_API_KEY) {
@@ -8,9 +9,7 @@ if (!process.env.GEMINI_API_KEY) {
 
 // Inizializza Gemini con il modello aggiornato
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Codice aggiornato
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
-// in alternativa puoi usare "gemini-2.5-flash"
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 // ─── 1. Auto-categorizzazione ─────────────────────────────────────────────────
 async function categorize(req, res) {
@@ -24,7 +23,8 @@ async function categorize(req, res) {
     const categorieUscita  = ["Cibo", "Trasporti", "Affitto", "Svago", "Altro"];
     const categoriePossibili = type === 'entrata' ? categorieEntrata : categorieUscita;
 
-    const prompt = `Sei un assistente finanziario. L'utente ha inserito una transazione di tipo "${type}" con questa descrizione: "${description}".
+    const prompt = `Sei un assistente finanziario.
+L'utente ha inserito una transazione di tipo "${type}" con questa descrizione: "${description}".
 Scegli la categoria più adatta ESCLUSIVAMENTE tra le seguenti: ${categoriePossibili.join(", ")}.
 Rispondi fornendo SOLO il nome della categoria esatta, senza punteggiatura o altre parole. Se non sei sicuro, rispondi "Altro".`;
 
@@ -41,11 +41,21 @@ Rispondi fornendo SOLO il nome della categoria esatta, senza punteggiatura o alt
   }
 }
 
-// ─── 2. Consigli finanziari ───────────────────────────────────────────────────
+// ─── 2. Consigli finanziari (Isolati per Utente con Cache dedicata) ───────────
 async function getAdvice(req, res) {
+  // MODIFICATO: La chiave della cache ora identifica univocamente l'utente corrente
+  const cacheKey = `ai:financial_advice:${req.user.id}`;
+
   try {
-    // Recupera tutte le transazioni (senza filtri, senza paginazione)
-    const data = await service.getAllTransactions({ page: 1, limit: 999999 });
+    // 1. Controlla se esiste un consiglio recente memorizzato in cache per QUESTO utente
+    const cachedAdvice = await redisClient.get(cacheKey);
+    if (cachedAdvice) {
+      console.log(`🚀 Risposta IA dell'utente ${req.user.id} recuperata da Redis Cache`);
+      return res.json(JSON.parse(cachedAdvice));
+    }
+
+    // 2. MODIFICATO: Recupera le transazioni passando il userId estratto dal token JWT
+    const data = await service.getAllTransactions({ page: 1, limit: 999999, userId: req.user.id });
     const transactions = data.allFilteredTransactions;
 
     if (!transactions || transactions.length === 0) {
@@ -54,25 +64,23 @@ async function getAdvice(req, res) {
       });
     }
 
-    // Calcola i totali da passare a Gemini
+    // 3. Calcola i totali da passare a Gemini (basati solo sui dati dell'utente)
     const entrate = transactions
       .filter(t => t.type === 'entrata')
       .reduce((acc, t) => acc + Number(t.amount), 0);
-
+      
     const uscite = transactions
       .filter(t => t.type === 'uscita')
       .reduce((acc, t) => acc + Number(t.amount), 0);
-
+      
     const uscitePerCategoria = transactions
       .filter(t => t.type === 'uscita')
       .reduce((acc, t) => {
         acc[t.category] = (acc[t.category] || 0) + Number(t.amount);
         return acc;
       }, {});
-
-    const tassoRisparmio = entrate > 0
-      ? ((entrate - uscite) / entrate * 100).toFixed(1)
-      : 0;
+      
+    const tassoRisparmio = entrate > 0 ? ((entrate - uscite) / entrate * 100).toFixed(1) : 0;
 
     const prompt = `Sei un esperto consulente finanziario personale. Ecco il riepilogo finanziario dell'utente basato su ${transactions.length} transazioni registrate:
 
@@ -89,11 +97,17 @@ Usa emoji per i titoli dei consigli. Massimo 200 parole totali.`;
     const result = await model.generateContent(prompt);
     const advice = result.response.text().trim();
 
-    res.json({ advice });
+    const finalResponse = { advice };
+
+    // 4. Salva il risultato nella cache specifica dell'utente (scadenza: 1 ora = 3600 secondi)
+    await redisClient.setEx(cacheKey, 3600, JSON.stringify(finalResponse));
+
+    res.json(finalResponse);
   } catch (err) {
     console.error("Errore /advice:", err.message);
     res.status(500).json({ error: err.message });
   }
 }
 
+// ─── Export delle funzioni per il router ─────────────────────────────────────
 module.exports = { categorize, getAdvice };

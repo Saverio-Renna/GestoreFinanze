@@ -4,6 +4,20 @@
 
 const request = require('supertest');
 
+// 1. Mockiamo il middleware di autenticazione
+jest.mock('../middleware/auth.middleware', () => (req, res, next) => {
+  req.user = { id: 1, username: 'testuser' };
+  next();
+});
+
+// 2. Mockiamo Redis (usato per la cache dei consigli AI)
+jest.mock('../config/redis', () => ({
+  connect: jest.fn().mockResolvedValue(),
+  on: jest.fn(),
+  get: jest.fn().mockResolvedValue(null), // Simula che la cache sia vuota
+  setEx: jest.fn().mockResolvedValue('OK')
+}));
+
 // ⚠️  Le variabili usate dentro jest.mock() DEVONO iniziare con "mock"
 //    Jest solleva i mock prima dell'esecuzione del file, quindi variabili
 //    normali non sarebbero ancora inizializzate.

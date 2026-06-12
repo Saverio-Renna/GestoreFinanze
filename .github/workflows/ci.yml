@@ -1,0 +1,41 @@
+name: Node.js Backend CI Pipeline
+
+# Il workflow si attiva automaticamente ad ogni push o pull request sui branch principali
+on:
+  push:
+    branches: [ main, master, dev, development ]
+  pull_request:
+    branches: [ main, master, dev, development ]
+
+jobs:
+  backend-testing:
+    name: Esecuzione Test CI (Jest)
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Scarica il codice sorgente dalla repository sul server di GitHub Actions
+      - name: Checkout del codice
+        uses: actions/checkout@v4
+
+      # Step 2: Configura l'ambiente Node.js impostando la cache nativa per velocizzare i job futuri
+      - name: Configurazione Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Specifica la versione LTS di riferimento del tuo progetto
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      # Step 3: Installa le dipendenze in modalità "Clean Install" (ottimizzata per ambienti CI)
+      - name: Installazione Dipendenze Backend
+        run: npm ci
+        working-directory: backend
+
+      # Step 4: Esecuzione dello script di test ottimizzato per la CI
+      - name: Esecuzione Test Suite
+        run: npm run test:ci
+        working-directory: backend
+        # Forniamo variabili d'ambiente simulate (dummy) per evitare warning nei log della CI
+        env:
+          NODE_ENV: test
+          JWT_SECRET: super_secret_key_for_continuous_integration_testing_purposes
+          GEMINI_API_KEY: dummy_gemini_api_key_for_ci_environment

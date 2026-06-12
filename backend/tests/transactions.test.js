@@ -4,6 +4,22 @@
 
 const request = require('supertest');
 
+// 1. Mockiamo il middleware di autenticazione per simulare un utente loggato
+jest.mock('../middleware/auth.middleware', () => (req, res, next) => {
+  req.user = { id: 1, username: 'testuser' };
+  next();
+});
+
+// 2. Mockiamo Redis per evitare connessioni di rete appese (Open Handles)
+jest.mock('../config/redis', () => ({
+  connect: jest.fn().mockResolvedValue(),
+  on: jest.fn(),
+  get: jest.fn().mockResolvedValue(null),
+  setEx: jest.fn().mockResolvedValue('OK'),
+  keys: jest.fn().mockResolvedValue([]),
+  del: jest.fn().mockResolvedValue(1)
+}));
+
 jest.mock('../services/transactions.service');
 const service = require('../services/transactions.service');
 

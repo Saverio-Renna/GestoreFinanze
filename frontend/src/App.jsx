@@ -9,7 +9,6 @@ const CATEGORIES = {
 
 const API_URL = "http://localhost:5000";
 
-// ─── Converte Markdown semplice in HTML ──────────────────────────────────────
 function renderMarkdown(text) {
   if (!text) return "";
   return text
@@ -21,10 +20,16 @@ function renderMarkdown(text) {
 }
 
 function App() {
+  // ─── STATI AUTENTICAZIONE ──────────────────────────────────────────────────
+  const [token, setToken] = useState(localStorage.getItem("token") || null);
+  const [username, setUsername] = useState(localStorage.getItem("username") || "");
+  const [isLoginView, setIsLoginView] = useState(true);
+  const [authForm, setAuthForm] = useState({ username: "", email: "", password: "" });
+
+  // ─── STATI APPLICAZIONE ────────────────────────────────────────────────────
   const [transactions, setTransactions] = useState([]);
   const [allFilteredTransactions, setAllFilteredTransactions] = useState([]);
-  const [loading, setLoading] = useState(true);
-
+  const [loading, setLoading] = useState(false);
   const [aiAdvice, setAiAdvice] = useState("");
   const [loadingAdvice, setLoadingAdvice] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
@@ -32,12 +37,57 @@ function App() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [filters, setFilters] = useState({ search: "", category: "Tutte", month: "" });
-
   const [form, setForm] = useState({ description: "", amount: "", type: "entrata", category: "Stipendio" });
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
 
+  // ─── GESTIONE AUTENTICAZIONE ───────────────────────────────────────────────
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    const endpoint = isLoginView ? "/api/auth/login" : "/api/auth/register";
+    
+    try {
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(authForm),
+      });
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error);
+
+      if (isLoginView) {
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("username", data.user.username);
+        setToken(data.token);
+        setUsername(data.user.username);
+      } else {
+        alert("Registrazione completata! Ora puoi fare il login.");
+        setIsLoginView(true);
+      }
+    } catch (err) {
+      alert("Errore: " + err.message);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("username");
+    setToken(null);
+    setUsername("");
+    setTransactions([]);
+    setAllFilteredTransactions([]);
+    setAiAdvice("");
+  };
+
+  const getAuthHeaders = () => ({
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${token}`
+  });
+
   const fetchTransactions = async () => {
+    if (!token) return;
+    setLoading(true);
     try {
       const queryParams = new URLSearchParams({
         page: page,
@@ -47,34 +97,29 @@ function App() {
         month: filters.month
       }).toString();
 
-      const res = await fetch(`${API_URL}/api/transactions?${queryParams}`);
+      const res = await fetch(`${API_URL}/api/transactions?${queryParams}`, {
+        headers: getAuthHeaders()
+      });
       const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error || "Errore nel server");
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) handleLogout();
+        throw new Error(data.error || "Errore nel server");
+      }
 
       setTransactions(data.transactions || []);
       setAllFilteredTransactions(data.allFilteredTransactions || []);
       setTotalPages(data.totalPages || 1);
     } catch (err) {
       console.error("ERRORE FETCH:", err);
-      setTransactions([]);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchTransactions();
-  }, [page, filters.search, filters.category, filters.month]);
-
-  const handleFilterChange = (key, value) => {
-    setFilters(prev => ({ ...prev, [key]: value }));
-    setPage(1);
-  };
-
-  const handleTypeChange = (newType) => {
-    setForm({ ...form, type: newType, category: CATEGORIES[newType][0] });
-  };
+    if (token) fetchTransactions();
+  }, [page, filters.search, filters.category, filters.month, token]);
 
   const handleAutoCategorize = async () => {
     if (!form.description) return alert("Scrivi prima una descrizione!");
@@ -82,13 +127,11 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/api/ai/categorize`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ description: form.description, type: form.type })
       });
       const data = await res.json();
-      if (res.ok && data.category) {
-        setForm({ ...form, category: data.category });
-      }
+      if (res.ok && data.category) setForm({ ...form, category: data.category });
     } catch (err) {
       console.error("Errore IA:", err);
     } finally {
@@ -100,11 +143,9 @@ function App() {
     setLoadingAdvice(true);
     setAiAdvice("");
     try {
-      const res = await fetch(`${API_URL}/api/ai/advice`);
+      const res = await fetch(`${API_URL}/api/ai/advice`, { headers: getAuthHeaders() });
       const data = await res.json();
-      if (res.ok && data.advice) {
-        setAiAdvice(data.advice);
-      }
+      if (res.ok && data.advice) setAiAdvice(data.advice);
     } catch (err) {
       setAiAdvice("Errore nel caricamento del consiglio.");
     } finally {
@@ -118,18 +159,13 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/api/transactions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify(form),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        alert("ERRORE DATABASE: " + (data.error || "Impossibile inserire"));
-        return;
-      }
+      if (!res.ok) throw new Error("Impossibile inserire");
       setForm({ description: "", amount: "", type: "entrata", category: "Stipendio" });
       fetchTransactions();
     } catch (err) {
-      console.error(err);
       alert("Errore di Rete: Impossibile contattare il backend.");
     }
   };
@@ -138,14 +174,10 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/api/transactions/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify(editData),
       });
-      if (!res.ok) {
-        const data = await res.json();
-        alert("Errore Modifica: " + data.error);
-        return;
-      }
+      if (!res.ok) throw new Error("Errore Modifica");
       setEditingId(null);
       fetchTransactions();
     } catch (err) {
@@ -156,11 +188,23 @@ function App() {
   const handleDelete = async (id) => {
     if (!window.confirm("Sicuro di voler eliminare questa transazione?")) return;
     try {
-      await fetch(`${API_URL}/api/transactions/${id}`, { method: "DELETE" });
+      await fetch(`${API_URL}/api/transactions/${id}`, { 
+        method: "DELETE",
+        headers: getAuthHeaders() 
+      });
       fetchTransactions();
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const handleFilterChange = (key, value) => {
+    setFilters(prev => ({ ...prev, [key]: value }));
+    setPage(1);
+  };
+
+  const handleTypeChange = (newType) => {
+    setForm({ ...form, type: newType, category: CATEGORIES[newType][0] });
   };
 
   const exportToCSV = () => {
@@ -179,6 +223,7 @@ function App() {
     document.body.removeChild(link);
   };
 
+  // ─── CALCOLO DATI PER GRAFICI ──────────────────────────────
   const entrate = allFilteredTransactions.filter(t => t.type === "entrata").reduce((acc, t) => acc + Number(t.amount), 0);
   const uscite = allFilteredTransactions.filter(t => t.type === "uscita").reduce((acc, t) => acc + Number(t.amount), 0);
   const saldo = entrate - uscite;
@@ -186,45 +231,86 @@ function App() {
   const dataBilancio = [{ name: "Entrate", value: entrate }, { name: "Uscite", value: uscite }];
   const COLORS_BILANCIO = ["#4ade80", "#f87171"];
 
-  const categorieRaggruppate = allFilteredTransactions.filter(t => t.type === "uscita").reduce((acc, t) => {
+  // Calcolo per Categorie Uscite
+  const categorieRaggruppateUscite = allFilteredTransactions.filter(t => t.type === "uscita").reduce((acc, t) => {
     acc[t.category] = (acc[t.category] || 0) + Number(t.amount);
     return acc;
   }, {});
-  const dataCategorieUscite = Object.keys(categorieRaggruppate).map(cat => ({ name: cat, value: categorieRaggruppate[cat] }));
-  const COLORS_CATEGORIE = ["#f87171", "#fb923c", "#fbbf24", "#60a5fa", "#c084fc"];
+  const dataCategorieUscite = Object.keys(categorieRaggruppateUscite).map(cat => ({ name: cat, value: categorieRaggruppateUscite[cat] }));
 
+  // Calcolo per Categorie Entrate
+  const categorieRaggruppateEntrate = allFilteredTransactions.filter(t => t.type === "entrata").reduce((acc, t) => {
+    acc[t.category] = (acc[t.category] || 0) + Number(t.amount);
+    return acc;
+  }, {});
+  const dataCategorieEntrate = Object.keys(categorieRaggruppateEntrate).map(cat => ({ name: cat, value: categorieRaggruppateEntrate[cat] }));
+
+  const COLORS_CATEGORIE = ["#f87171", "#fb923c", "#fbbf24", "#60a5fa", "#c084fc"];
+  const COLORS_ENTRATE = ["#4ade80", "#22c55e", "#16a34a", "#15803d", "#86efac"];
   const tutteLeCategorieUnivoche = Array.from(new Set(Object.values(CATEGORIES).flat()));
 
+  // Funzione helper per renderizzare la percentuale nei grafici
+  const renderPercentLabel = ({ name, percent }) => `${name} ${(percent * 100).toFixed(1)}%`;
+
+  // ─── RENDER SCHERMATA LOGIN ────────────────────────────────────────────────
+  if (!token) {
+    return (
+      <div className="container">
+        <div className="auth-container">
+          <h2>{isLoginView ? "Accedi" : "Registrati"}</h2>
+          <form onSubmit={handleAuthSubmit} className="auth-form">
+            {!isLoginView && (
+              <input
+                type="text"
+                placeholder="Username"
+                value={authForm.username}
+                onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
+                required
+              />
+            )}
+            <input
+              type="email"
+              placeholder="Email"
+              value={authForm.email}
+              onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+              required
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={authForm.password}
+              onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+              required
+            />
+            <button type="submit">{isLoginView ? "Entra" : "Crea Account"}</button>
+          </form>
+          <button className="auth-toggle" onClick={() => setIsLoginView(!isLoginView)}>
+            {isLoginView ? "Non hai un account? Registrati" : "Hai già un account? Accedi"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── RENDER APPLICAZIONE PRINCIPALE ────────────────────────────────────────
   return (
     <div className="container">
-      <h1>Gestionale Finanze</h1>
+      <div className="header-top">
+        <div>
+          <h1>Gestionale Finanze</h1>
+          <p style={{ color: '#888', margin: 0 }}>Benvenuto, <strong>{username}</strong></p>
+        </div>
+        <button className="btn-logout" onClick={handleLogout}>Esci</button>
+      </div>
 
-      {/* FORM DI INSERIMENTO */}
       <form onSubmit={handleSubmit} className="form-inserimento">
         <div className="input-group">
-          <input
-            type="text"
-            placeholder="Descrizione"
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-          />
-          <button
-            type="button"
-            className="btn-ai"
-            onClick={handleAutoCategorize}
-            disabled={isCategorizing || !form.description}
-            title="Lascia che l'IA scelga la categoria"
-          >
+          <input type="text" placeholder="Descrizione" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+          <button type="button" className="btn-ai" onClick={handleAutoCategorize} disabled={isCategorizing || !form.description} title="Lascia che l'IA scelga la categoria">
             {isCategorizing ? "⏳" : "✨"}
           </button>
         </div>
-        <input
-          type="number"
-          step="0.01"
-          placeholder="Importo"
-          value={form.amount}
-          onChange={(e) => setForm({ ...form, amount: e.target.value })}
-        />
+        <input type="number" step="0.01" placeholder="Importo" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
         <select value={form.type} onChange={(e) => handleTypeChange(e.target.value)}>
           <option value="entrata">Entrata</option>
           <option value="uscita">Uscita</option>
@@ -237,7 +323,6 @@ function App() {
 
       {loading && <p>Caricamento dati...</p>}
 
-      {/* CARTE STATISTICHE */}
       <div className="statistiche">
         <div className="stat-card saldo">
           <h3>Saldo Filtrato</h3>
@@ -253,7 +338,6 @@ function App() {
         </div>
       </div>
 
-      {/* AI FINANCIAL ADVISOR */}
       <div className="ai-advisor">
         <div className="ai-advisor-header">
           <h3>🤖 AI Financial Advisor</h3>
@@ -262,82 +346,75 @@ function App() {
           </button>
         </div>
         {aiAdvice ? (
-          <div
-            className="ai-advice-text"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAdvice) }}
-          />
+          <div className="ai-advice-text" dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAdvice) }} />
         ) : (
-          <p className="ai-advice-placeholder">
-            Clicca su &apos;Genera Analisi&apos; per ottenere consigli personalizzati basati sulle tue transazioni attuali.
-          </p>
+          <p className="ai-advice-placeholder">Clicca su &apos;Genera Analisi&apos; per ottenere consigli personalizzati.</p>
         )}
       </div>
 
-      {/* GRAFICI */}
       {allFilteredTransactions.length > 0 && (
         <div className="grafici">
+          {/* Grafico Bilancio (Entrate vs Uscite) */}
           <div>
             <h4>Bilancio Filtrato</h4>
             <PieChart width={300} height={250}>
-              <Pie data={dataBilancio} cx="50%" cy="50%" innerRadius={40} outerRadius={80} paddingAngle={5} dataKey="value">
+              <Pie 
+                data={dataBilancio} cx="50%" cy="50%" innerRadius={40} outerRadius={80} paddingAngle={5} dataKey="value"
+                label={({ percent }) => `${(percent * 100).toFixed(1)}%`}
+              >
                 {dataBilancio.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS_BILANCIO[index % COLORS_BILANCIO.length]} />)}
               </Pie>
               <Tooltip formatter={(value) => `€ ${Number(value).toFixed(2)}`} />
               <Legend />
             </PieChart>
           </div>
+
+          {/* Grafico Entrate per Categoria (in percentuale) */}
+          {dataCategorieEntrate.length > 0 && (
+            <div>
+              <h4>Analisi Entrate</h4>
+              <PieChart width={300} height={250}>
+                <Pie data={dataCategorieEntrate} cx="50%" cy="50%" outerRadius={80} label={renderPercentLabel} dataKey="value">
+                  {dataCategorieEntrate.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS_ENTRATE[index % COLORS_ENTRATE.length]} />)}
+                </Pie>
+                <Tooltip formatter={(value) => `€ ${Number(value).toFixed(2)}`} />
+              </PieChart>
+            </div>
+          )}
+
+          {/* Grafico Uscite per Categoria (in percentuale) */}
           {dataCategorieUscite.length > 0 && (
             <div>
-              <h4>Analisi Spese (Filtro Corrente)</h4>
+              <h4>Analisi Spese</h4>
               <PieChart width={300} height={250}>
-                <Pie data={dataCategorieUscite} cx="50%" cy="50%" outerRadius={80} label dataKey="value">
+                <Pie data={dataCategorieUscite} cx="50%" cy="50%" outerRadius={80} label={renderPercentLabel} dataKey="value">
                   {dataCategorieUscite.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS_CATEGORIE[index % COLORS_CATEGORIE.length]} />)}
                 </Pie>
                 <Tooltip formatter={(value) => `€ ${Number(value).toFixed(2)}`} />
-                <Legend />
               </PieChart>
             </div>
           )}
         </div>
       )}
 
-      {/* BARRA DEI FILTRI */}
       <div className="barra-filtri">
         <div className="filtri-gruppo">
-          <input
-            type="text"
-            placeholder="Cerca descrizione..."
-            value={filters.search}
-            onChange={(e) => handleFilterChange("search", e.target.value)}
-          />
+          <input type="text" placeholder="Cerca descrizione..." value={filters.search} onChange={(e) => handleFilterChange("search", e.target.value)} />
           <select value={filters.category} onChange={(e) => handleFilterChange("category", e.target.value)}>
             <option value="Tutte">Tutte le categorie</option>
             {tutteLeCategorieUnivoche.map(cat => <option key={cat} value={cat}>{cat}</option>)}
           </select>
-          <input
-            type="month"
-            value={filters.month}
-            onChange={(e) => handleFilterChange("month", e.target.value)}
-          />
+          <input type="month" value={filters.month} onChange={(e) => handleFilterChange("month", e.target.value)} />
           {(filters.search || filters.category !== "Tutte" || filters.month) && (
-            <button className="btn-reset" onClick={() => setFilters({ search: "", category: "Tutte", month: "" })}>
-              Resetta Filtri
-            </button>
+            <button className="btn-reset" onClick={() => setFilters({ search: "", category: "Tutte", month: "" })}>Resetta Filtri</button>
           )}
         </div>
         <button className="btn-export" onClick={exportToCSV}>📥 Esporta CSV</button>
       </div>
 
-      {/* TABELLA */}
       <table className="tabella-transazioni">
         <thead>
-          <tr>
-            <th>Descrizione</th>
-            <th>Importo</th>
-            <th>Tipo</th>
-            <th>Categoria</th>
-            <th>Azioni</th>
-          </tr>
+          <tr><th>Descrizione</th><th>Importo</th><th>Tipo</th><th>Categoria</th><th>Azioni</th></tr>
         </thead>
         <tbody>
           {transactions.length === 0 ? (
@@ -383,15 +460,10 @@ function App() {
         </tbody>
       </table>
 
-      {/* PAGINAZIONE */}
       <div className="paginazione">
-        <button className="btn-pagina" disabled={page === 1} onClick={() => setPage(prev => Math.max(prev - 1, 1))}>
-          ◀ Precedente
-        </button>
+        <button className="btn-pagina" disabled={page === 1} onClick={() => setPage(prev => Math.max(prev - 1, 1))}>◀ Precedente</button>
         <span>Pagina <strong>{page}</strong> di {totalPages}</span>
-        <button className="btn-pagina" disabled={page === totalPages} onClick={() => setPage(prev => Math.min(prev + 1, totalPages))}>
-          Successivo ▶
-        </button>
+        <button className="btn-pagina" disabled={page === totalPages} onClick={() => setPage(prev => Math.min(prev + 1, totalPages))}>Successivo ▶</button>
       </div>
     </div>
   );
