@@ -9,7 +9,7 @@ if (!process.env.GEMINI_API_KEY) {
 // Inizializza Gemini con il modello aggiornato
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Codice aggiornato
-const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" }); 
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
 // in alternativa puoi usare "gemini-2.5-flash"
 
 // ─── 1. Auto-categorizzazione ─────────────────────────────────────────────────

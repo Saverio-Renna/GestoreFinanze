@@ -1,0 +1,1548 @@
+
+
+=========================================
+FILE: backend\app.js
+=========================================
+
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+
+const logger = require('./middleware/logger');
+const errorHandler = require('./middleware/errorHandler');
+const transactionsRoutes = require('./routes/transactions.routes');
+const aiRoutes = require('./routes/ai.routes');
+
+const app = express();
+
+// ─── Middleware globali ───────────────────────────────────────────────────────
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173'
+}));
+app.use(express.json());
+app.use(logger);
+
+// ─── Routes ──────────────────────────────────────────────────────────────────
+app.use('/api/transactions', transactionsRoutes);
+app.use('/api/ai', aiRoutes);
+
+// ─── Gestione errori ─────────────────────────────────────────────────────────
+app.use(errorHandler);
+
+module.exports = app;
+
+=========================================
+FILE: backend\controllers\ai.controller.js
+=========================================
+
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const service = require('../services/transactions.service');
+
+// Verifica chiave all'avvio
+if (!process.env.GEMINI_API_KEY) {
+  console.error("⚠️  GEMINI_API_KEY mancante nel file .env!");
+}
+
+// Inizializza Gemini con il modello aggiornato
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Codice aggiornato
+const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" }); 
+// in alternativa puoi usare "gemini-2.5-flash"
+
+// ─── 1. Auto-categorizzazione ─────────────────────────────────────────────────
+async function categorize(req, res) {
+  try {
+    const { description, type } = req.body;
+    if (!description || !type) {
+      return res.status(400).json({ error: "description e type sono obbligatori" });
+    }
+
+    const categorieEntrata = ["Stipendio", "Regalo", "Investimenti", "Altro"];
+    const categorieUscita  = ["Cibo", "Trasporti", "Affitto", "Svago", "Altro"];
+    const categoriePossibili = type === 'entrata' ? categorieEntrata : categorieUscita;
+
+    const prompt = `Sei un assistente finanziario. L'utente ha inserito una transazione di tipo "${type}" con questa descrizione: "${description}".
+Scegli la categoria più adatta ESCLUSIVAMENTE tra le seguenti: ${categoriePossibili.join(", ")}.
+Rispondi fornendo SOLO il nome della categoria esatta, senza punteggiatura o altre parole. Se non sei sicuro, rispondi "Altro".`;
+
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text().trim();
+
+    // Validazione: se Gemini risponde qualcosa di non previsto, usiamo "Altro"
+    const finalCategory = categoriePossibili.includes(responseText) ? responseText : "Altro";
+
+    res.json({ category: finalCategory });
+  } catch (err) {
+    console.error("Errore /categorize:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// ─── 2. Consigli finanziari ───────────────────────────────────────────────────
+async function getAdvice(req, res) {
+  try {
+    // Recupera tutte le transazioni (senza filtri, senza paginazione)
+    const data = await service.getAllTransactions({ page: 1, limit: 999999 });
+    const transactions = data.allFilteredTransactions;
+
+    if (!transactions || transactions.length === 0) {
+      return res.json({
+        advice: "Non ci sono ancora transazioni registrate. Inizia ad aggiungere le tue spese e entrate per ricevere consigli personalizzati!"
+      });
+    }
+
+    // Calcola i totali da passare a Gemini
+    const entrate = transactions
+      .filter(t => t.type === 'entrata')
+      .reduce((acc, t) => acc + Number(t.amount), 0);
+
+    const uscite = transactions
+      .filter(t => t.type === 'uscita')
+      .reduce((acc, t) => acc + Number(t.amount), 0);
+
+    const uscitePerCategoria = transactions
+      .filter(t => t.type === 'uscita')
+      .reduce((acc, t) => {
+        acc[t.category] = (acc[t.category] || 0) + Number(t.amount);
+        return acc;
+      }, {});
+
+    const tassoRisparmio = entrate > 0
+      ? ((entrate - uscite) / entrate * 100).toFixed(1)
+      : 0;
+
+    const prompt = `Sei un esperto consulente finanziario personale. Ecco il riepilogo finanziario dell'utente basato su ${transactions.length} transazioni registrate:
+
+- Totale Entrate: €${entrate.toFixed(2)}
+- Totale Uscite: €${uscite.toFixed(2)}
+- Saldo netto: €${(entrate - uscite).toFixed(2)}
+- Tasso di risparmio: ${tassoRisparmio}%
+- Spese per categoria: ${JSON.stringify(uscitePerCategoria, null, 2)}
+
+Scrivi 3 consigli finanziari pratici e specifici in italiano, con tono professionale ma incoraggiante.
+Analizza se ci sono categorie dove spende troppo, commenta il tasso di risparmio e dai suggerimenti concreti.
+Usa emoji per i titoli dei consigli. Massimo 200 parole totali.`;
+
+    const result = await model.generateContent(prompt);
+    const advice = result.response.text().trim();
+
+    res.json({ advice });
+  } catch (err) {
+    console.error("Errore /advice:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+module.exports = { categorize, getAdvice };
+
+=========================================
+FILE: backend\controllers\transactions.controller.js
+=========================================
+
+const service = require('../services/transactions.service');
+
+async function getAll(req, res) {
+  try {
+    const data = await service.getAllTransactions(req.query);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+async function create(req, res) {
+  try {
+    const result = await service.createTransaction(req.body);
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+async function update(req, res) {
+  try {
+    const { id } = req.params;
+    const result = await service.updateTransaction(id, req.body);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+async function remove(req, res) {
+  try {
+    const { id } = req.params;
+    const result = await service.deleteTransaction(id);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+module.exports = { getAll, create, update, remove };
+
+=========================================
+FILE: backend\db\pool.js
+=========================================
+
+require('dotenv').config();
+const mysql = require('mysql2/promise');
+ 
+const pool = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10
+});
+ 
+module.exports = pool;
+ 
+
+=========================================
+FILE: backend\middleware\errorHandler.js
+=========================================
+
+// Middleware di gestione errori centralizzata
+// Deve avere ESATTAMENTE 4 parametri (err, req, res, next) per essere
+// riconosciuto da Express come error handler
+
+function errorHandler(err, req, res, next) {
+  // Log dell'errore sul server (visibile in console)
+  console.error(`[ERROR] ${req.method} ${req.url} →`, err.message);
+
+  // Determina lo status code: usa quello dell'errore se presente, altrimenti 500
+  const statusCode = err.status || err.statusCode || 500;
+
+  // Risposta JSON uniforme per tutti gli errori
+  res.status(statusCode).json({
+    error: err.message || 'Errore interno del server',
+    // In sviluppo mostra anche lo stack trace per debugging
+    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
+  });
+}
+
+module.exports = errorHandler;
+
+=========================================
+FILE: backend\middleware\logger.js
+=========================================
+
+const morgan = require('morgan');
+
+// Formato custom: metodo, url, status, tempo risposta, dimensione body
+const logFormat = ':method :url :status :response-time ms - :res[content-length] bytes';
+
+// In produzione usa 'combined' (formato Apache completo con IP e user-agent)
+// In sviluppo usa il formato custom più leggibile
+const logger = morgan(
+  process.env.NODE_ENV === 'production' ? 'combined' : logFormat
+);
+
+module.exports = logger;
+
+=========================================
+FILE: backend\package.json
+=========================================
+
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "test": "jest --forceExit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "morgan": "^1.10.0",
+    "mysql2": "^3.22.5"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"]
+  }
+}
+
+=========================================
+FILE: backend\routes\ai.routes.js
+=========================================
+
+const express = require('express');
+const router = express.Router();
+const controller = require('../controllers/ai.controller');
+
+router.post('/categorize', controller.categorize);
+router.get('/advice', controller.getAdvice);
+
+module.exports = router;
+
+=========================================
+FILE: backend\routes\transactions.routes.js
+=========================================
+
+const express = require('express');
+const router = express.Router();
+const controller = require('../controllers/transactions.controller');
+
+router.get('/', controller.getAll);
+router.post('/', controller.create);
+router.put('/:id', controller.update);
+router.delete('/:id', controller.remove);
+
+module.exports = router;
+
+=========================================
+FILE: backend\server.js
+=========================================
+
+const app = require('./app');
+
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Ambiente: ${process.env.NODE_ENV || 'development'}`);
+});
+
+=========================================
+FILE: backend\services\transactions.service.js
+=========================================
+
+const pool = require('../db/pool');
+
+// READ PAGINATA CON FILTRI
+async function getAllTransactions(queryParams = {}) {
+  const page = parseInt(queryParams.page) || 1;
+  const limit = parseInt(queryParams.limit) || 10;
+  const offset = (page - 1) * limit;
+  const { search, category, month } = queryParams;
+
+  let baseWhere = ' WHERE 1=1';
+  const params = [];
+
+  if (search) {
+    baseWhere += ' AND description LIKE ?';
+    params.push(`%${search}%`);
+  }
+  if (category && category !== 'Tutte') {
+    baseWhere += ' AND category = ?';
+    params.push(category);
+  }
+  if (month) {
+    baseWhere += ' AND DATE_FORMAT(created_at, "%Y-%m") = ?';
+    params.push(month);
+  }
+
+  // Conta il totale per la paginazione
+  const [countRows] = await pool.query(`SELECT COUNT(*) as total FROM transactions ${baseWhere}`, params);
+  const total = countRows[0].total;
+  const totalPages = Math.ceil(total / limit);
+
+  // Recupera i record limitati (pagina corrente)
+  const paginatedQuery = `SELECT * FROM transactions ${baseWhere} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  const [rows] = await pool.query(paginatedQuery, [...params, limit, offset]);
+
+  // Recupera tutti i record filtrati (senza limite) per grafici e CSV
+  const [allFilteredRows] = await pool.query(`SELECT * FROM transactions ${baseWhere} ORDER BY created_at DESC`, params);
+
+  return {
+    transactions: rows,
+    totalPages: totalPages || 1,
+    currentPage: page,
+    allFilteredTransactions: allFilteredRows
+  };
+}
+
+// CREATE
+async function createTransaction(data) {
+  const { description, amount, type, category } = data;
+  const [result] = await pool.query(
+    'INSERT INTO transactions (description, amount, type, category) VALUES (?, ?, ?, ?)',
+    [description, amount, type, category]
+  );
+  return result;
+}
+
+// UPDATE
+async function updateTransaction(id, data) {
+  const { description, amount, type, category } = data;
+  const [result] = await pool.query(
+    `UPDATE transactions SET description = ?, amount = ?, type = ?, category = ? WHERE id = ?`,
+    [description, amount, type, category, id]
+  );
+  return result;
+}
+
+// DELETE
+async function deleteTransaction(id) {
+  const [result] = await pool.query('DELETE FROM transactions WHERE id = ?', [id]);
+  return result;
+}
+
+module.exports = { getAllTransactions, createTransaction, updateTransaction, deleteTransaction };
+
+=========================================
+FILE: backend\tests\ai.test.js
+=========================================
+
+const request = require('supertest');
+
+// Variabile condivisa per controllare la risposta di Gemini nei test
+let geminiRisposta = 'Cibo';
+
+// Mock di Gemini: usa sempre geminiRisposta come testo restituito
+jest.mock('@google/generative-ai', () => {
+  return {
+    GoogleGenerativeAI: jest.fn().mockImplementation(() => ({
+      getGenerativeModel: jest.fn().mockReturnValue({
+        generateContent: jest.fn().mockImplementation(() =>
+          Promise.resolve({ response: { text: () => geminiRisposta } })
+        )
+      })
+    }))
+  };
+});
+
+// Mock del service per /advice (evita connessione DB)
+jest.mock('../services/transactions.service');
+const service = require('../services/transactions.service');
+
+// Mock del logger
+jest.mock('../middleware/logger', () => (req, res, next) => next());
+
+const app = require('../app');
+
+// ─── TEST POST /api/ai/categorize ─────────────────────────────────────────────
+describe('POST /api/ai/categorize', () => {
+
+  beforeEach(() => {
+    geminiRisposta = 'Cibo'; // reset prima di ogni test
+  });
+
+  test('restituisce una categoria valida per una uscita', async () => {
+    const res = await request(app)
+      .post('/api/ai/categorize')
+      .send({ description: 'Pizza con amici', type: 'uscita' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('category');
+    expect(res.body.category).toBe('Cibo');
+  });
+
+  test('restituisce 400 se mancano description o type', async () => {
+    const res = await request(app)
+      .post('/api/ai/categorize')
+      .send({ description: 'Test senza type' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  test('usa "Altro" se Gemini risponde una categoria non valida', async () => {
+    geminiRisposta = 'RispostaInvalida'; // Gemini risponde qualcosa di non previsto
+
+    const res = await request(app)
+      .post('/api/ai/categorize')
+      .send({ description: 'Qualcosa di strano', type: 'uscita' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.category).toBe('Altro');
+  });
+
+});
+
+// ─── TEST GET /api/ai/advice ──────────────────────────────────────────────────
+describe('GET /api/ai/advice', () => {
+
+  beforeEach(() => {
+    geminiRisposta = '💡 Stai risparmiando bene!'; // reset prima di ogni test
+  });
+
+  test('restituisce un consiglio finanziario se ci sono transazioni', async () => {
+    service.getAllTransactions.mockResolvedValue({
+      allFilteredTransactions: [
+        { type: 'entrata', amount: '1500', category: 'Stipendio' },
+        { type: 'uscita',  amount: '300',  category: 'Cibo' }
+      ]
+    });
+
+    const res = await request(app).get('/api/ai/advice');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('advice');
+    expect(typeof res.body.advice).toBe('string');
+  });
+
+  test('restituisce messaggio di default se non ci sono transazioni', async () => {
+    service.getAllTransactions.mockResolvedValue({
+      allFilteredTransactions: []
+    });
+
+    const res = await request(app).get('/api/ai/advice');
+
+    expect(res.status).toBe(200);
+    expect(res.body.advice).toContain('Non ci sono ancora transazioni');
+  });
+
+});
+
+=========================================
+FILE: backend\tests\transactions.test.js
+=========================================
+
+const request = require('supertest');
+
+// Mock del service: evitiamo connessioni reali al database
+jest.mock('../services/transactions.service');
+const service = require('../services/transactions.service');
+
+// Mock del logger per non sporcare l'output dei test
+jest.mock('../middleware/logger', () => (req, res, next) => next());
+
+const app = require('../app');
+
+// ─── Dati fittizi usati nei test ──────────────────────────────────────────────
+const transazioneFake = {
+  id: 1,
+  description: 'Stipendio luglio',
+  amount: '1500.00',
+  type: 'entrata',
+  category: 'Stipendio',
+  created_at: '2024-07-01T10:00:00.000Z'
+};
+
+const rispostaGetAll = {
+  transactions: [transazioneFake],
+  allFilteredTransactions: [transazioneFake],
+  totalPages: 1,
+  currentPage: 1
+};
+
+// ─── TEST GET /api/transactions ───────────────────────────────────────────────
+describe('GET /api/transactions', () => {
+
+  test('restituisce lista transazioni con status 200', async () => {
+    service.getAllTransactions.mockResolvedValue(rispostaGetAll);
+
+    const res = await request(app).get('/api/transactions');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('transactions');
+    expect(res.body.transactions).toHaveLength(1);
+    expect(res.body.transactions[0].description).toBe('Stipendio luglio');
+  });
+
+  test('supporta filtro per categoria', async () => {
+    service.getAllTransactions.mockResolvedValue(rispostaGetAll);
+
+    const res = await request(app)
+      .get('/api/transactions?category=Stipendio');
+
+    expect(res.status).toBe(200);
+    expect(service.getAllTransactions).toHaveBeenCalledWith(
+      expect.objectContaining({ category: 'Stipendio' })
+    );
+  });
+
+  test('restituisce 500 se il service lancia un errore', async () => {
+    service.getAllTransactions.mockRejectedValue(new Error('DB non raggiungibile'));
+
+    const res = await request(app).get('/api/transactions');
+
+    expect(res.status).toBe(500);
+    expect(res.body).toHaveProperty('error');
+  });
+
+});
+
+// ─── TEST POST /api/transactions ──────────────────────────────────────────────
+describe('POST /api/transactions', () => {
+
+  test('crea una nuova transazione e restituisce 201', async () => {
+    service.createTransaction.mockResolvedValue({ insertId: 2 });
+
+    const res = await request(app)
+      .post('/api/transactions')
+      .send({
+        description: 'Spesa supermercato',
+        amount: 45.50,
+        type: 'uscita',
+        category: 'Cibo'
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('restituisce 500 se il service lancia un errore', async () => {
+    service.createTransaction.mockRejectedValue(new Error('Errore INSERT'));
+
+    const res = await request(app)
+      .post('/api/transactions')
+      .send({
+        description: 'Test errore',
+        amount: 10,
+        type: 'uscita',
+        category: 'Altro'
+      });
+
+    expect(res.status).toBe(500);
+  });
+
+});
+
+// ─── TEST PUT /api/transactions/:id ───────────────────────────────────────────
+describe('PUT /api/transactions/:id', () => {
+
+  test('aggiorna una transazione esistente e restituisce 200', async () => {
+    service.updateTransaction.mockResolvedValue({ affectedRows: 1 });
+
+    const res = await request(app)
+      .put('/api/transactions/1')
+      .send({
+        description: 'Stipendio aggiornato',
+        amount: 1600,
+        type: 'entrata',
+        category: 'Stipendio'
+      });
+
+    expect(res.status).toBe(200);
+  });
+
+});
+
+// ─── TEST DELETE /api/transactions/:id ───────────────────────────────────────
+describe('DELETE /api/transactions/:id', () => {
+
+  test('elimina una transazione e restituisce 200', async () => {
+    service.deleteTransaction.mockResolvedValue({ affectedRows: 1 });
+
+    const res = await request(app)
+      .delete('/api/transactions/1');
+
+    expect(res.status).toBe(200);
+  });
+
+  test('restituisce 500 se il service lancia un errore', async () => {
+    service.deleteTransaction.mockRejectedValue(new Error('Errore DELETE'));
+
+    const res = await request(app)
+      .delete('/api/transactions/999');
+
+    expect(res.status).toBe(500);
+  });
+
+});
+
+=========================================
+FILE: frontend\eslint.config.js
+=========================================
+
+import js from '@eslint/js'
+import globals from 'globals'
+import react from 'eslint-plugin-react'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+
+export default [
+  { ignores: ['dist'] },
+  {
+    files: ['**/*.{js,jsx}'],
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: globals.browser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        ecmaFeatures: { jsx: true },
+        sourceType: 'module',
+      },
+    },
+    settings: { react: { version: '18.3' } },
+    plugins: {
+      react,
+      'react-hooks': reactHooks,
+      'react-refresh': reactRefresh,
+    },
+    rules: {
+      ...js.configs.recommended.rules,
+      ...react.configs.recommended.rules,
+      ...react.configs['jsx-runtime'].rules,
+      ...reactHooks.configs.recommended.rules,
+      'react/jsx-no-target-blank': 'off',
+      'react-refresh/only-export-components': [
+        'warn',
+        { allowConstantExport: true },
+      ],
+    },
+  },
+]
+
+
+=========================================
+FILE: frontend\index.html
+=========================================
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vite + React</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+=========================================
+FILE: frontend\package.json
+=========================================
+
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^3.8.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "eslint": "^9.13.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.14",
+    "globals": "^15.11.0",
+    "vite": "^5.4.10"
+  }
+}
+
+
+=========================================
+FILE: frontend\src\App.css
+=========================================
+
+/* ─── Layout generale ────────────────────────────────────────────────────── */
+#root {
+  display: flex;
+  flex-direction: column;   /* Allinea i blocchi dall'alto in basso */
+  align-items: center;      /* Centra orizzontalmente tutto il contenuto */
+  justify-content: center;  /* Centra verticalmente rispetto all'altezza */
+  min-height: 100vh;        /* Prende tutta l'altezza dello schermo visibile */
+  width: 100%;              /* Estende la base a tutta larghezza */
+}
+
+.container {
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.container h1 {
+  text-align: center;
+  width: 100%;
+  margin-bottom: 2rem; /* Aggiunge un po' di spazio sotto il titolo se serve */
+}
+
+
+/* ─── Form di inserimento ────────────────────────────────────────────────── */
+.form-inserimento {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.form-inserimento .input-group {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.form-inserimento input[type="text"],
+.form-inserimento input[type="number"],
+.form-inserimento select {
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+}
+
+.form-inserimento input[type="number"] {
+  width: 120px;
+}
+
+.btn-ai {
+  padding: 0.5rem;
+  background-color: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-ai:disabled {
+  cursor: wait;
+}
+
+.btn-aggiungi {
+  padding: 0.5rem 1rem;
+  background-color: #646cff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* ─── Carte statistiche ──────────────────────────────────────────────────── */
+.statistiche {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+  flex-wrap: wrap;
+}
+
+.stat-card {
+  padding: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  flex: 1;
+  background-color: #1e1e1e;
+  min-width: 200px;
+}
+
+.stat-card .stat-valore {
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.stat-card.saldo  { color: #fff; }
+.stat-card.entrate { color: #4ade80; }
+.stat-card.uscite  { color: #f87171; }
+
+/* ─── AI Financial Advisor ───────────────────────────────────────────────── */
+.ai-advisor {
+  background-color: #1e1e2f;
+  padding: 1.5rem;
+  border-radius: 8px;
+  margin-bottom: 2rem;
+  border: 1px solid #4ade80;
+  text-align: left;
+}
+
+.ai-advisor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.ai-advisor-header h3 {
+  margin: 0;
+  color: #4ade80;
+}
+
+.btn-analisi {
+  padding: 0.5rem 1rem;
+  background-color: #4ade80;
+  color: #1e1e1e;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.btn-analisi:disabled {
+  cursor: wait;
+}
+
+.ai-advice-text {
+  color: #e2e8f0;
+  line-height: 1.8;
+  font-size: 0.97rem;
+}
+
+.ai-advice-placeholder {
+  color: #888;
+  font-style: italic;
+  margin: 0;
+}
+
+/* ─── Grafici ────────────────────────────────────────────────────────────── */
+.grafici {
+  display: flex;
+  justify-content: space-around;
+  flex-wrap: wrap;
+  margin-bottom: 2rem;
+  background-color: #2d2d2d;
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+/* ─── Barra filtri ───────────────────────────────────────────────────────── */
+.barra-filtri {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  background-color: #1a1a1a;
+  padding: 1rem;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.filtri-gruppo {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.filtri-gruppo input,
+.filtri-gruppo select {
+  padding: 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background-color: #2d2d2d;
+  color: #fff;
+}
+
+.btn-reset {
+  padding: 0.5rem 1rem;
+  background-color: #d32f2f;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-export {
+  padding: 0.5rem 1rem;
+  background-color: #2e7d32;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+/* ─── Tabella ────────────────────────────────────────────────────────────── */
+.tabella-transazioni {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.tabella-transazioni thead tr {
+  background-color: #1a1a1a;
+  color: white;
+}
+
+.tabella-transazioni th,
+.tabella-transazioni td {
+  padding: 0.5rem;
+  border: 1px solid #444;
+}
+
+.tabella-transazioni td.importo {
+  font-weight: bold;
+}
+
+.tabella-transazioni td.tipo {
+  text-transform: capitalize;
+}
+
+.tabella-transazioni td.vuota {
+  text-align: center;
+}
+
+.riga-entrata {
+  text-align: center;
+  background-color: rgba(74, 222, 128, 0.1);
+}
+
+.riga-uscita {
+  text-align: center;
+  background-color: rgba(248, 113, 113, 0.1);
+}
+
+.badge-categoria {
+  background-color: #444;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+}
+
+.btn-modifica {
+  margin-right: 0.5rem;
+}
+
+.btn-elimina {
+  background-color: #c2185b;
+  color: white;
+  border: none;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.input-edit-amount {
+  width: 80px;
+}
+
+/* ─── Paginazione ────────────────────────────────────────────────────────── */
+.paginazione {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.btn-pagina {
+  padding: 0.5rem 1rem;
+}
+
+.btn-pagina:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+=========================================
+FILE: frontend\src\App.jsx
+=========================================
+
+import { useEffect, useState } from "react";
+import { PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
+import "./App.css";
+
+const CATEGORIES = {
+  entrata: ["Stipendio", "Regalo", "Investimenti", "Altro"],
+  uscita: ["Cibo", "Trasporti", "Affitto", "Svago", "Altro"]
+};
+
+const API_URL = "http://localhost:5000";
+
+// ─── Converte Markdown semplice in HTML ──────────────────────────────────────
+function renderMarkdown(text) {
+  if (!text) return "";
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/^(\d+\.\s)/gm, "<br/><span style='font-weight:bold'>$1</span>")
+    .replace(/\n\n/g, "<br/><br/>")
+    .replace(/\n/g, " ");
+}
+
+function App() {
+  const [transactions, setTransactions] = useState([]);
+  const [allFilteredTransactions, setAllFilteredTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [aiAdvice, setAiAdvice] = useState("");
+  const [loadingAdvice, setLoadingAdvice] = useState(false);
+  const [isCategorizing, setIsCategorizing] = useState(false);
+
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [filters, setFilters] = useState({ search: "", category: "Tutte", month: "" });
+
+  const [form, setForm] = useState({ description: "", amount: "", type: "entrata", category: "Stipendio" });
+  const [editingId, setEditingId] = useState(null);
+  const [editData, setEditData] = useState({});
+
+  const fetchTransactions = async () => {
+    try {
+      const queryParams = new URLSearchParams({
+        page: page,
+        limit: 10,
+        search: filters.search,
+        category: filters.category,
+        month: filters.month
+      }).toString();
+
+      const res = await fetch(`${API_URL}/api/transactions?${queryParams}`);
+      const data = await res.json();
+
+      if (!res.ok) throw new Error(data.error || "Errore nel server");
+
+      setTransactions(data.transactions || []);
+      setAllFilteredTransactions(data.allFilteredTransactions || []);
+      setTotalPages(data.totalPages || 1);
+    } catch (err) {
+      console.error("ERRORE FETCH:", err);
+      setTransactions([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTransactions();
+  }, [page, filters.search, filters.category, filters.month]);
+
+  const handleFilterChange = (key, value) => {
+    setFilters(prev => ({ ...prev, [key]: value }));
+    setPage(1);
+  };
+
+  const handleTypeChange = (newType) => {
+    setForm({ ...form, type: newType, category: CATEGORIES[newType][0] });
+  };
+
+  const handleAutoCategorize = async () => {
+    if (!form.description) return alert("Scrivi prima una descrizione!");
+    setIsCategorizing(true);
+    try {
+      const res = await fetch(`${API_URL}/api/ai/categorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: form.description, type: form.type })
+      });
+      const data = await res.json();
+      if (res.ok && data.category) {
+        setForm({ ...form, category: data.category });
+      }
+    } catch (err) {
+      console.error("Errore IA:", err);
+    } finally {
+      setIsCategorizing(false);
+    }
+  };
+
+  const fetchAiAdvice = async () => {
+    setLoadingAdvice(true);
+    setAiAdvice("");
+    try {
+      const res = await fetch(`${API_URL}/api/ai/advice`);
+      const data = await res.json();
+      if (res.ok && data.advice) {
+        setAiAdvice(data.advice);
+      }
+    } catch (err) {
+      setAiAdvice("Errore nel caricamento del consiglio.");
+    } finally {
+      setLoadingAdvice(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.description || !form.amount) return alert("Compila tutti i campi");
+    try {
+      const res = await fetch(`${API_URL}/api/transactions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert("ERRORE DATABASE: " + (data.error || "Impossibile inserire"));
+        return;
+      }
+      setForm({ description: "", amount: "", type: "entrata", category: "Stipendio" });
+      fetchTransactions();
+    } catch (err) {
+      console.error(err);
+      alert("Errore di Rete: Impossibile contattare il backend.");
+    }
+  };
+
+  const handleUpdate = async (id) => {
+    try {
+      const res = await fetch(`${API_URL}/api/transactions/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editData),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        alert("Errore Modifica: " + data.error);
+        return;
+      }
+      setEditingId(null);
+      fetchTransactions();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm("Sicuro di voler eliminare questa transazione?")) return;
+    try {
+      await fetch(`${API_URL}/api/transactions/${id}`, { method: "DELETE" });
+      fetchTransactions();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const exportToCSV = () => {
+    if (allFilteredTransactions.length === 0) return alert("Nessun dato da esportare");
+    const headers = ["ID", "Descrizione", "Importo", "Tipo", "Categoria", "Data Creazione"];
+    const rows = allFilteredTransactions.map(t => [
+      t.id, `"${t.description.replace(/"/g, '""')}"`, t.amount, t.type, t.category, t.created_at
+    ]);
+    const csvContent = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `transazioni_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const entrate = allFilteredTransactions.filter(t => t.type === "entrata").reduce((acc, t) => acc + Number(t.amount), 0);
+  const uscite = allFilteredTransactions.filter(t => t.type === "uscita").reduce((acc, t) => acc + Number(t.amount), 0);
+  const saldo = entrate - uscite;
+
+  const dataBilancio = [{ name: "Entrate", value: entrate }, { name: "Uscite", value: uscite }];
+  const COLORS_BILANCIO = ["#4ade80", "#f87171"];
+
+  const categorieRaggruppate = allFilteredTransactions.filter(t => t.type === "uscita").reduce((acc, t) => {
+    acc[t.category] = (acc[t.category] || 0) + Number(t.amount);
+    return acc;
+  }, {});
+  const dataCategorieUscite = Object.keys(categorieRaggruppate).map(cat => ({ name: cat, value: categorieRaggruppate[cat] }));
+  const COLORS_CATEGORIE = ["#f87171", "#fb923c", "#fbbf24", "#60a5fa", "#c084fc"];
+
+  const tutteLeCategorieUnivoche = Array.from(new Set(Object.values(CATEGORIES).flat()));
+
+  return (
+    <div className="container">
+      <h1>Gestionale Finanze</h1>
+
+      {/* FORM DI INSERIMENTO */}
+      <form onSubmit={handleSubmit} className="form-inserimento">
+        <div className="input-group">
+          <input
+            type="text"
+            placeholder="Descrizione"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+          />
+          <button
+            type="button"
+            className="btn-ai"
+            onClick={handleAutoCategorize}
+            disabled={isCategorizing || !form.description}
+            title="Lascia che l'IA scelga la categoria"
+          >
+            {isCategorizing ? "⏳" : "✨"}
+          </button>
+        </div>
+        <input
+          type="number"
+          step="0.01"
+          placeholder="Importo"
+          value={form.amount}
+          onChange={(e) => setForm({ ...form, amount: e.target.value })}
+        />
+        <select value={form.type} onChange={(e) => handleTypeChange(e.target.value)}>
+          <option value="entrata">Entrata</option>
+          <option value="uscita">Uscita</option>
+        </select>
+        <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+          {CATEGORIES[form.type].map(cat => <option key={cat} value={cat}>{cat}</option>)}
+        </select>
+        <button type="submit" className="btn-aggiungi">Aggiungi</button>
+      </form>
+
+      {loading && <p>Caricamento dati...</p>}
+
+      {/* CARTE STATISTICHE */}
+      <div className="statistiche">
+        <div className="stat-card saldo">
+          <h3>Saldo Filtrato</h3>
+          <p className="stat-valore">€ {saldo.toFixed(2)}</p>
+        </div>
+        <div className="stat-card entrate">
+          <h3>Totale Entrate</h3>
+          <p className="stat-valore">€ {entrate.toFixed(2)}</p>
+        </div>
+        <div className="stat-card uscite">
+          <h3>Totale Uscite</h3>
+          <p className="stat-valore">€ {uscite.toFixed(2)}</p>
+        </div>
+      </div>
+
+      {/* AI FINANCIAL ADVISOR */}
+      <div className="ai-advisor">
+        <div className="ai-advisor-header">
+          <h3>🤖 AI Financial Advisor</h3>
+          <button className="btn-analisi" onClick={fetchAiAdvice} disabled={loadingAdvice}>
+            {loadingAdvice ? "Analisi in corso..." : "Genera Analisi"}
+          </button>
+        </div>
+        {aiAdvice ? (
+          <div
+            className="ai-advice-text"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAdvice) }}
+          />
+        ) : (
+          <p className="ai-advice-placeholder">
+            Clicca su &apos;Genera Analisi&apos; per ottenere consigli personalizzati basati sulle tue transazioni attuali.
+          </p>
+        )}
+      </div>
+
+      {/* GRAFICI */}
+      {allFilteredTransactions.length > 0 && (
+        <div className="grafici">
+          <div>
+            <h4>Bilancio Filtrato</h4>
+            <PieChart width={300} height={250}>
+              <Pie data={dataBilancio} cx="50%" cy="50%" innerRadius={40} outerRadius={80} paddingAngle={5} dataKey="value">
+                {dataBilancio.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS_BILANCIO[index % COLORS_BILANCIO.length]} />)}
+              </Pie>
+              <Tooltip formatter={(value) => `€ ${Number(value).toFixed(2)}`} />
+              <Legend />
+            </PieChart>
+          </div>
+          {dataCategorieUscite.length > 0 && (
+            <div>
+              <h4>Analisi Spese (Filtro Corrente)</h4>
+              <PieChart width={300} height={250}>
+                <Pie data={dataCategorieUscite} cx="50%" cy="50%" outerRadius={80} label dataKey="value">
+                  {dataCategorieUscite.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS_CATEGORIE[index % COLORS_CATEGORIE.length]} />)}
+                </Pie>
+                <Tooltip formatter={(value) => `€ ${Number(value).toFixed(2)}`} />
+                <Legend />
+              </PieChart>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* BARRA DEI FILTRI */}
+      <div className="barra-filtri">
+        <div className="filtri-gruppo">
+          <input
+            type="text"
+            placeholder="Cerca descrizione..."
+            value={filters.search}
+            onChange={(e) => handleFilterChange("search", e.target.value)}
+          />
+          <select value={filters.category} onChange={(e) => handleFilterChange("category", e.target.value)}>
+            <option value="Tutte">Tutte le categorie</option>
+            {tutteLeCategorieUnivoche.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+          </select>
+          <input
+            type="month"
+            value={filters.month}
+            onChange={(e) => handleFilterChange("month", e.target.value)}
+          />
+          {(filters.search || filters.category !== "Tutte" || filters.month) && (
+            <button className="btn-reset" onClick={() => setFilters({ search: "", category: "Tutte", month: "" })}>
+              Resetta Filtri
+            </button>
+          )}
+        </div>
+        <button className="btn-export" onClick={exportToCSV}>📥 Esporta CSV</button>
+      </div>
+
+      {/* TABELLA */}
+      <table className="tabella-transazioni">
+        <thead>
+          <tr>
+            <th>Descrizione</th>
+            <th>Importo</th>
+            <th>Tipo</th>
+            <th>Categoria</th>
+            <th>Azioni</th>
+          </tr>
+        </thead>
+        <tbody>
+          {transactions.length === 0 ? (
+            <tr><td colSpan="5" className="vuota">Nessuna transazione disponibile</td></tr>
+          ) : (
+            transactions.map((t) => (
+              <tr key={t.id} className={t.type === 'entrata' ? 'riga-entrata' : 'riga-uscita'}>
+                {editingId === t.id ? (
+                  <>
+                    <td><input value={editData.description} onChange={(e) => setEditData({ ...editData, description: e.target.value })} /></td>
+                    <td><input type="number" step="0.01" className="input-edit-amount" value={editData.amount} onChange={(e) => setEditData({ ...editData, amount: e.target.value })} /></td>
+                    <td>
+                      <select value={editData.type} onChange={(e) => setEditData({ ...editData, type: e.target.value, category: CATEGORIES[e.target.value][0] })}>
+                        <option value="entrata">Entrata</option>
+                        <option value="uscita">Uscita</option>
+                      </select>
+                    </td>
+                    <td>
+                      <select value={editData.category} onChange={(e) => setEditData({ ...editData, category: e.target.value })}>
+                        {CATEGORIES[editData.type || 'entrata'].map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                      </select>
+                    </td>
+                    <td>
+                      <button className="btn-modifica" onClick={() => handleUpdate(t.id)}>Salva</button>
+                      <button onClick={() => setEditingId(null)}>Annulla</button>
+                    </td>
+                  </>
+                ) : (
+                  <>
+                    <td>{t.description}</td>
+                    <td className="importo">€ {Number(t.amount).toFixed(2)}</td>
+                    <td className="tipo">{t.type}</td>
+                    <td><span className="badge-categoria">{t.category || "Nessuna"}</span></td>
+                    <td>
+                      <button className="btn-modifica" onClick={() => { setEditingId(t.id); setEditData(t); }}>Modifica</button>
+                      <button className="btn-elimina" onClick={() => handleDelete(t.id)}>Elimina</button>
+                    </td>
+                  </>
+                )}
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+
+      {/* PAGINAZIONE */}
+      <div className="paginazione">
+        <button className="btn-pagina" disabled={page === 1} onClick={() => setPage(prev => Math.max(prev - 1, 1))}>
+          ◀ Precedente
+        </button>
+        <span>Pagina <strong>{page}</strong> di {totalPages}</span>
+        <button className="btn-pagina" disabled={page === totalPages} onClick={() => setPage(prev => Math.min(prev + 1, totalPages))}>
+          Successivo ▶
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+
+=========================================
+FILE: frontend\src\index.css
+=========================================
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+a:hover {
+  color: #535bf2;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+button:hover {
+  border-color: #646cff;
+}
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: #747bff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}
+
+
+=========================================
+FILE: frontend\src\main.jsx
+=========================================
+
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+
+=========================================
+FILE: frontend\vite.config.js
+=========================================
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+})
