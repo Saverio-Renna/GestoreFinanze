@@ -7,7 +7,7 @@ const CATEGORIES = {
   uscita: ["Cibo", "Trasporti", "Affitto", "Svago", "Altro"]
 };
 
-const API_URL = "http://localhost:5000";
+const API_URL = "";
 
 function renderMarkdown(text) {
   if (!text) return "";
